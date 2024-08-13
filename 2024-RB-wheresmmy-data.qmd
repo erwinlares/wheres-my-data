@@ -1,26 +1,218 @@
 ---
 title: "Research Bazaar 2024"
+subtitle: "Where's my data"
 author: "Erwin Lares"
 format: revealjs
 ---
 
-## Quarto
 
-Quarto enables you to weave together content and executable code into a finished presentation. To learn more about Quarto presentations see <https://quarto.org/docs/presentations/>.
-
-## Bullets
-
-When you click the **Render** button a document will be generated that includes:
-
--   Content authored with markdown
--   Output from executable code
-
-## Code
-
-When you click the **Render** button a presentation will be generated that includes both content and the output of embedded code. You can embed code like this:
-
-```{r}
-1 + 1
+```{r libraries}
+library(googledrive)
+library(tidyverse)
+library(httr2)
+library(jsonlite)
+library(arrow)
+library(rbenchmark)
+library(tictoc)
+library(data.table)
 ```
 
+## A shameless plug for RCI and the DSP
+
+## Local workflows 
+
+### Start with the basis 
+
+We are all familiar with `read.csv()` and its `tidyverse` counterpart `read_csv()`.  
+
+---
+
+Is size a factor that should be considered when reading csv files? As it happens, it is. It is an inverse relationship. For smaller files go with `read.csv()`. As the files grow in size, `read_csv()` is more performant.
+
+
+
+```{r}
+results <- benchmark(read.csv("data/original-penguins.csv"), read_csv("data/original-penguins.csv"), replications = 10)
+
+results
+```
+
+
+```{r}
+results <- benchmark(read.csv("data/new-penguins.csv"), read_csv("data/new-penguins.csv"), replications = 10)
+
+results
+```
+
+### Conclusion 
+
+When reading csv files, be mindful that size does matter. For smaller size files, go with `read.csv()`
+
+
+--- 
+
+Below around 1 MB read. csv() is actually faster than read_csv() while fread is much faster than both, although these savings are likely to be inconsequential for such small datasets. For files beyond 100 MB in size fread() and read_csv() can be expected to be around 5 times faster than read. csv() . Taken from [_Efficient R Programming_](https://bookdown.org/csgillespie/efficientR/).
+
+### Alternatives to `read*csv()`
+
+`data.table` is a good (and faster) alternative to both `read.csv()` and `read_csv()`. Downsize is that working with `data.table` objects requires you to use their own syntax for common data wrangling processes. 
+
+
+```{r}
+results <- benchmark(read.csv("data/original-penguins.csv"), fread("data/original-penguins.csv"), replications = 10)
+
+results
+```
+
+```{r}
+results <- benchmark(read_csv("data/new-penguins.csv"), fread("data/new-penguins.csv"), replications = 10)
+
+results
+```
+
+### How about writing to a file? 
+
+```{r}
+results <- benchmark(write_csv(penguins, "data/original-penguins.csv"), fwrite(penguins, "data/dt-penguins.csv"), replications = 10)
+
+results
+
+dt_penguins
+```
+
+### Conclusions
+
+`data.table` is faster than both `read.csv()` and `read_csv()` both for reading into R and writing data out of R. Own syntax, a bit of mixed good news is that exist a package called `dtplyr` that aims to marry the familiar syntax of `dplyr` and the faster `data.table` code. dtplyer is still slower than operations directly in `data.table` . 
+
+If you plan to be a user of chtc paying attention to these details could make a huge difference for running your analyses. 
+
+## File formats you might want to know about 
+
+A lot of us are familiar with text-based tabular formats such as .csv files. If you and your researchers are working with large dataset, it might be useful to explore other file formats. Today, I will show you a bit about `Apache arrow` and the two file formats it supports, `parquet` and `feather`. 
+
+Apache Arrow is a software development platform for building high performance applications that process and transport large data sets. It is designed to improve the performance of data analysis methods, and to increase the efficiency of moving data from one system or programming language to another.
+
+```{r}
+arrow_penguins <- arrow_table(penguins)
+
+arrow_penguins
+
+write_feather(arrow_penguins, 
+              sink = "data/feather-penguins.arrow")
+
+write_parquet(arrow_penguins, 
+              sink = "data/parquet-penguins.parquet")
+
+object.size(arrow_penguins)
+
+```
+### Conclusion 
+
+We see that arrow file format affords you a lots of savings both in memory and in/on disk. 
+
+Downside ... they are not easy to inspect
+Upside ... dplyr is a wrapper for arrow. So your analysis pipeline may remain unchanged. 
+
+### General conclusions about local workflows
+
+
+## Remote workflows
+
+This part of the demo deals with accessing data from a few sources outside of your personal device.
+
+### GoogleDrive 
+
+You might want to write a file to your googledrive. I'll walk you through how that can be accomplished in the next few minutes. 
+
+A few details before we get to work — [](https://kb.wisc.edu/googleapps/page.php?id=124766)
+
+- Access to a service account — [](https://console.cloud.google.com)
+
+#### Authorize googledrive 
+
+#### Authenticate 
+
+```{r authenticate-googledrive}
+
+library(googledrive)
+drive_auth(
+email = Sys.getenv("workbench_googledrive_email"),
+path = "workbench-googledrive.json",
+subject = NULL,
+scopes = "drive",
+cache = gargle::gargle_oauth_cache(),
+use_oob = gargle::gargle_oob_default(),
+token = NULL
+)
+
+
+```
+
+#### Find the drive 
+
+```{r}
+drive_find(n_max = 10)
+
+```
+
+#### upload a file 
+
+```{r}
+
+drive_upload(
+    media = "data/original-penguins.csv",
+    path = "workbench-googledrive/original-penguins.csv")
+
+```
+
+#### Checking 
+
+```{r}
+gd_files <- drive_find(type = "csv")
+
+gd_files
+```
+
+#### Reading a googledrive file
+
+This approach does not read the file into R, but rather writes it locally. It needs to be subsequently load it into the current session.  
+
+```{r}
+# penguins <- drive_get(as_id(gd_files$id[1]))
+# this just got the id back 
+
+drive_download(
+    file = "workbench-googledrive/new-penguins.csv",
+    path = "data/new-penguins.csv",
+    type = "csv", 
+    overwrite = FALSE)
+
+```
+
+### Accesing researchdrive 
+
+```{r}
+system("kinit rdrive-lares-connect@AD.WISC.EDU")
+system("ls -lah /mnt/researchdrive/lares")
+
+read_csv("/mnt/researchdrive/lares/public_data/palmerpenguins.csv")
+```
+
+
+### APIs 
+
+```{r}
+req <- request("https://api.thedogapi.com/v1/images/search") |> 
+    req_headers(limit = 5)
+  
+req <- request("https://api.thecatapi.com/v1/images/search?limit=15&breed_ids=beng&api_key=live_nD5vkT9N6L4PXnK0gs1sFETKWcSAnso9YkH6iYPMfsZpK2mVStNEYxX3tIGzgfdL") |> 
+    req_body_json(list(has_breeds = 1))
+            
+req |> req_dry_run()
+resp <- req_perform(req)
+resp %>% resp_status_desc()
+
+resp |> resp_content_type()
+resp |> resp_body_json()
+```
 
